@@ -101,7 +101,7 @@ class DecisionTreeRegressionModel(RegressionModel):
         :return:
         """
         if not self.trained:
-            return num_samples > self.model_config.min_samples_to_fit
+            return num_samples >= self.model_config.min_samples_to_fit
         num_new_samples = num_samples - self.num_observations_used_to_fit
         return num_new_samples >= self.model_config.n_new_samples_before_refit
 
