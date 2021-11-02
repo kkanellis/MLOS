@@ -2,6 +2,10 @@
 # Copyright (c) Microsoft Corporation.
 # Licensed under the MIT License.
 #
+import numpy as np
+import pandas as pd
+from scipy import spatial
+
 from mlos.Exceptions import PointOutOfDomainException
 from mlos.Spaces.Dimensions.Dimension import Dimension
 from mlos.Spaces.Hypergrid import Hypergrid
@@ -251,6 +255,88 @@ class SimpleHypergrid(Hypergrid):
                     point[joined_subgrid.subgrid.name] = sub_point
 
         return point
+
+    def lhs_dataframe(self, num_samples, num_iterations=1000):
+        """ Implementation inspired by `scikit-optimize' """
+        from mlos.Spaces.HypergridAdapters import (
+                DiscreteToUnitContinuousHypergridAdapter, HierarchicalToFlatHypergridAdapter)
+
+        if not self.is_hierarchical():
+            dimensions = self._dimensions
+            assert self.dimensions == self._dimensions
+            adapter = DiscreteToUnitContinuousHypergridAdapter(adaptee=self)
+        else:
+            adapter = DiscreteToUnitContinuousHypergridAdapter(
+                adaptee=HierarchicalToFlatHypergridAdapter(adaptee=self))
+            dimensions = adapter.target.dimensions
+        num_dims = len(dimensions)
+
+        def lhs_normalized():
+            """ Generates `num_samples' randomly sampled points in the [0, 1) range
+
+            NOTE: It does not take into account any space constraints
+            """
+            x = np.linspace(0, 1, num_samples + 1)
+            u = np.array([
+                    [ self.random_state.random() for _ in range(num_dims) ]
+                    for _ in range(num_samples) ])
+            h, h_perm = np.zeros_like(u), np.zeros_like(u)
+
+            for j in range(num_dims):
+                h[:, j] = u[:, j] * np.diff(x) + x[:num_samples]
+
+            # shuffle generated samples
+            for j in range(num_dim):
+                order = list(range(num_samples))
+                self.random_state.shuffle(order)
+                h_perm[:, j] = h[order, j]
+
+            return h_perm
+
+        def get_valid_points(h):
+            """ Filters out invalid (w.r.t space constraints) points """
+            points, h_valid = [ ], [ ]
+            for i in range(num_samples):
+                p = Point()
+                for j, dimension in enumerate(dimensions):
+                    p[dimension.name] = h[i, j]
+
+                # apply transformations
+                p = adapter.unproject_point(p)
+                if self.is_hierarchical():
+                    valid_dimensions = [ dim.name for dim in self.get_dimensions_for_point(p) ]
+                    p = Point(**{ dim: p[dim] for dim in valid_dimensions })
+
+                if not self.contains_point(p):
+                    continue
+
+                points.append(p.to_dict())
+                h_valid.append(h[i, :])
+
+            return points, np.array(h_valid)
+
+        maxdist = 0
+        for i in range(num_iterations):
+            h = lhs_normalized()
+
+            points, h_valid = get_valid_points(h)
+            if len(points) < num_samples:
+                # could not generate enough valid points -- retry with more points
+                assert self.is_hierarchical()
+                return self.lhs_dataframe(int(num_samples) * 2, num_iterations=num_iterations)
+
+            # maximize the minimum distance between points
+            d = spatial.distance.pdist(np.array(h_valid), 'euclidean')
+            if maxdist < np.min(d):
+                maxdist = np.min(d)
+                points_opt = points.copy()
+
+        if len(points_opt) > num_samples:
+            # keep only a subset of points
+            # NOTE: this is suboptimal, but not sure how much better we can do
+            points_opt = points_opt[:num_samples]
+
+        return pd.DataFrame(points_opt)
 
     @property
     def dimensions(self):
