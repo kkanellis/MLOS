@@ -286,7 +286,7 @@ class SimpleHypergrid(Hypergrid):
                 h[:, j] = u[:, j] * np.diff(x) + x[:num_samples]
 
             # shuffle generated samples
-            for j in range(num_dim):
+            for j in range(num_dims):
                 order = list(range(num_samples))
                 self.random_state.shuffle(order)
                 h_perm[:, j] = h[order, j]
